@@ -451,5 +451,6 @@ def remove_lockfile(path: str) -> None:
 
 
 if __name__ == "__main__":
+    print(f"cronico {__version__}")
     main()
     info("Exited cleanly.")
