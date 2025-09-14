@@ -26,7 +26,7 @@ CRON_ALIASES = {
     "@hourly": "0 * * * *",
 }
 
-DEFAULT_TASKS_FILENAME = "tasks.yaml"
+DEFAULT_TASKS_FILENAME = "cronico.yaml"
 ENV_VAR_NAME = "CRONICO_TASKS_FILE"
 MAX_WORKERS = 10
 LOCK_FILE = "/tmp/cronico.pid"
