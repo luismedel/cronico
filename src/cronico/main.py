@@ -98,11 +98,24 @@ def run_task(task: "Task") -> int:
     )
 
     if not task.stream_output:
-        stdout, stderr = process.communicate(timeout=task.timeout)
-        if stdout:
-            task.log_info(stdout)
-        if stderr:
-            task.log_error(stderr)
+
+        def output_buffer(buf: str, fn: Callable[[str], None]) -> None:
+            if buf:
+                for line in buf.splitlines():
+                    fn(line)
+
+        try:
+            stdout, stderr = process.communicate(timeout=task.timeout)
+            output_buffer(stdout, task.log_info)
+            output_buffer(stderr, task.log_error)
+        except subprocess.TimeoutExpired:
+            task.log_error(f"Timeout after {task.timeout}s, killing process...")
+            process.kill()
+            process.wait()
+            stdout, stderr = process.communicate()
+            output_buffer(stdout, task.log_info)
+            output_buffer(stderr, task.log_error)
+            raise
     else:
 
         def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
@@ -131,6 +144,7 @@ def run_task(task: "Task") -> int:
             for t in threads:
                 t.join()
 
+    task.log_info(f"Process exited with code {process.returncode}")
     return process.returncode
 
 
@@ -276,12 +290,6 @@ def cmd_run(tasks_file: str, args: argparse.Namespace) -> None:
 
 @file_command
 def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
-    tasks = load_tasks(tasks_file)
-    if not tasks:
-        critical("No valid tasks configured")
-
-    info(f"Loaded {len(tasks)} tasks")
-
     import atexit
 
     pidfile = args.pidfile
@@ -289,38 +297,43 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
     atexit.register(remove_lockfile, path=pidfile)
 
     stop_event = threading.Event()
-    reload_event = threading.Event()
 
-    def handle_signal(signum, frame) -> None:
+    tasks: list[Task] = []
+
+    def load_tasks_file(signum: int | None = None, frame=None) -> None:
+        if signum is not None:
+            signal_name = signal.Signals(signum).name
+            info(f"Received signal {signal_name} ({signum}).")
+
+        nonlocal tasks
+        try:
+            tasks = load_tasks(tasks_file)
+            info(f"Loaded {len(tasks)} tasks")
+        except Exception as e:
+            error(f"Error reloading tasks: {e}")
+
+    def signal_exit(signum, frame) -> None:
         signal_name = signal.Signals(signum).name
         info(f"Received signal {signal_name} ({signum}).")
         if signum in (signal.SIGINT, signal.SIGTERM):
             stop_event.set()
         else:
-            reload_event.set()
+            warning(f"Unhandled signal {signal_name} ({signum}), ignoring...")
 
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGHUP, handle_signal)
+    signal.signal(signal.SIGINT, signal_exit)
+    signal.signal(signal.SIGTERM, signal_exit)
+    signal.signal(signal.SIGHUP, load_tasks_file)
 
+    load_tasks_file()
     executor = ThreadPoolExecutor(max_workers=args.workers)
 
     try:
         next_task: Task | None = None
         while not stop_event.is_set():
-            if reload_event.is_set():
-                info("Reloading tasks...")
-                try:
-                    tasks = load_tasks(tasks_file)
-                    info(f"Reloaded {len(tasks)} tasks")
-                except Exception as e:
-                    error(f"Error reloading tasks: {e}")
-                reload_event.clear()
-
             sorted_tasks: list[Task] = sorted(tasks, key=lambda t: t.next_run)  # type: ignore
             task: Task | None = next((t for t in sorted_tasks if t.next_run and not t.is_busy), None)
             if not task:
-                time.sleep(1)
+                stop_event.wait(1)
                 continue
 
             next_run = task.next_run
@@ -330,7 +343,7 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
                 if task != next_task:
                     next_task = task
                     info(f"Next task to run: '{task.name}' at {next_run}")
-                time.sleep(1)
+                stop_event.wait(1)
                 continue
 
             if stop_event.is_set():
