@@ -97,6 +97,7 @@ def run_task(task: "Task") -> int:
         text=True,
         env=env,
         bufsize=1,
+        cwd=task.working_dir if task.working_dir else os.getcwd(),
     )
     
     if not task.stream_output:
@@ -152,6 +153,7 @@ class Task:
         self.timeout: float | None = float(timeout) if timeout is not None else None
         self.env_file = cfg.get("env_file")
         self.environment = cfg.get("environment") or {}
+        self.working_dir = cfg.get("working_dir") or None
         self.last_run: datetime | None = None
         self.next_run: datetime = None  # type: ignore
         self.calculate_next_run()
@@ -334,6 +336,7 @@ tasks:
         max_attempts: 3
         env_file: ".env"
         timeout: 60  # seconds
+        working_dir: "/path/to/dir"
         environment:
             MY_VAR: "value"
     
