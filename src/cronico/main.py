@@ -361,6 +361,7 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
     finally:
         info("Shutting down...")
         executor.shutdown(wait=True)
+    info("Exited cleanly.")
 
 
 def cmd_template(args: argparse.Namespace) -> None:
@@ -422,6 +423,8 @@ def main() -> None:
     p_template.set_defaults(func=cmd_template)
 
     args = parser.parse_args()
+
+    print(f"cronico {__version__}")
     args.func(args)
 
 
@@ -455,6 +458,4 @@ def remove_lockfile(path: str) -> None:
 
 
 if __name__ == "__main__":
-    print(f"cronico {__version__}")
     main()
-    info("Exited cleanly.")
