@@ -32,9 +32,6 @@ LOCK_FILE = "/tmp/cronico.pid"
 TASKS_FILE = os.environ.get(ENV_VAR_NAME, DEFAULT_TASKS_FILENAME)
 
 
-stop_event = threading.Event()
-
-
 def info(msg: str) -> None:
     print(msg, flush=True)
 
@@ -99,7 +96,7 @@ def run_task(task: "Task") -> int:
         bufsize=1,
         cwd=task.working_dir if task.working_dir else os.getcwd(),
     )
-    
+
     if not task.stream_output:
         stdout, stderr = process.communicate(timeout=task.timeout)
         if stdout:
@@ -107,6 +104,7 @@ def run_task(task: "Task") -> int:
         if stderr:
             task.log_error(stderr)
     else:
+
         def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
             for line in iter(stream.readline, ""):
                 log_fn(line.rstrip())
@@ -163,16 +161,16 @@ class Task:
     @property
     def is_busy(self) -> bool:
         return self._running or self._pending
-    
-    def mark_pending(self) -> None: 
+
+    def mark_pending(self) -> None:
         if self._running:
             raise RuntimeError("Cannot mark a running task as pending")
         self._pending = True
-    
+
     def log_info(self, msg: str) -> None:
         tstamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         info(f"[{tstamp}] [{self.name}] {msg}")
-    
+
     def log_error(self, msg: str) -> None:
         tstamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         error(f"[{tstamp}] [{self.name}] {msg}")
@@ -249,6 +247,7 @@ def file_command(fn: Callable[[str, argparse.Namespace], None]) -> Callable[[arg
             critical(f"Error parsing YAML file '{tasks_file}': {e}")
         except Exception as e:
             critical(f"Unexpected error: {e}")
+
     return wrapper
 
 
@@ -283,23 +282,41 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
 
     info(f"Loaded {len(tasks)} tasks")
 
-
     import atexit
 
     pidfile = args.pidfile
     check_lockfile(pidfile)
     atexit.register(remove_lockfile, path=pidfile)
 
+    stop_event = threading.Event()
+    reload_event = threading.Event()
+
+    def handle_signal(signum, frame) -> None:
+        signal_name = signal.Signals(signum).name
+        info(f"Received signal {signal_name} ({signum}).")
+        if signum in (signal.SIGINT, signal.SIGTERM):
+            stop_event.set()
+        else:
+            reload_event.set()
+
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGHUP, handle_signal)
-
 
     executor = ThreadPoolExecutor(max_workers=args.workers)
 
     try:
         next_task: Task | None = None
         while not stop_event.is_set():
+            if reload_event.is_set():
+                info("Reloading tasks...")
+                try:
+                    tasks = load_tasks(tasks_file)
+                    info(f"Reloaded {len(tasks)} tasks")
+                except Exception as e:
+                    error(f"Error reloading tasks: {e}")
+                reload_event.clear()
+
             sorted_tasks: list[Task] = sorted(tasks, key=lambda t: t.next_run)  # type: ignore
             task: Task | None = next((t for t in sorted_tasks if t.next_run and not t.is_busy), None)
             if not task:
@@ -326,6 +343,7 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
         info("Shutting down...")
         executor.shutdown(wait=True)
 
+
 def cmd_template(args: argparse.Namespace) -> None:
     TPL = """
 tasks:
@@ -339,7 +357,7 @@ tasks:
         working_dir: "/path/to/dir"
         environment:
             MY_VAR: "value"
-    
+
     another_task:
         cron:
             minute: 0
@@ -355,16 +373,11 @@ tasks:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="cronico",
-        description="Cronico: another YAML-based scheduler"
-    )
+    parser = argparse.ArgumentParser(prog="cronico", description="Cronico: another YAML-based scheduler")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parser.add_argument(
-        "--version", action="version", version="cronico 0.0.1"
-    )
-    
+    parser.add_argument("--version", action="version", version="cronico 0.0.1")
+
     parser.add_argument(
         "--file",
         type=str,
@@ -382,32 +395,15 @@ def main() -> None:
     p_daemon = subparsers.add_parser("daemon", help="Start the scheduler loop")
     p_daemon.set_defaults(func=cmd_daemon)
     p_daemon.add_argument(
-        "--workers",
-        type=int,
-        default=10,
-        help=f"Number of concurrent workers (default: {MAX_WORKERS})"
+        "--workers", type=int, default=10, help=f"Number of concurrent workers (default: {MAX_WORKERS})"
     )
-    p_daemon.add_argument(
-        "--pidfile",
-        type=str,
-        help=f"Path to PID file (default: {LOCK_FILE})",
-        default=LOCK_FILE
-    )
+    p_daemon.add_argument("--pidfile", type=str, help=f"Path to PID file (default: {LOCK_FILE})", default=LOCK_FILE)
 
     p_template = subparsers.add_parser("template", help="Output a pair of sample tasks")
     p_template.set_defaults(func=cmd_template)
 
     args = parser.parse_args()
     args.func(args)
-
-
-def handle_signal(signum, frame) -> None:
-    signal_name = signal.Signals(signum).name
-    info(f"Received signal {signal_name} ({signum}).")
-    if signum in (signal.SIGINT, signal.SIGTERM):
-        stop_event.set()
-    else:
-        info(f"Unhandled signal {signal_name} ({signum}).")
 
 
 def check_lockfile(path: str) -> None:
@@ -429,6 +425,7 @@ def check_lockfile(path: str) -> None:
 
     with open(path, "w") as f:
         f.write(str(os.getpid()))
+
 
 def remove_lockfile(path: str) -> None:
     try:

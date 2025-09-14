@@ -2,20 +2,20 @@
 .PHONY: lint format build publish
 
 lint:
-	mypy --version
-	@mypy src/cronico
-	ruff --version
+	@ruff --version
 	@ruff check src/cronico
+	@mypy --version
+	@mypy --python-version 3.12 src/cronico
+	@mypy --python-version 3.13 src/cronico
 
 lint-fix:
-	mypy --version
-	@mypy src/cronico
-	ruff --version
+	@ruff --version
 	@ruff check --fix src/cronico
 
 format:
-	ruff --version
+	@ruff --version
 	@ruff check --select I --fix src/cronico
+	@ruff format --line-length=120 src/cronico
 
 build:
 	python -m build
