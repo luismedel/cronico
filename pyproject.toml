@@ -1,6 +1,6 @@
 [project]
 name = "cronico"
-version = "0.9.2"
+version = "0.9.3"
 description = "Another YAML-based scheduler"
 readme = "README.md"
 authors = [
