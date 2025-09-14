@@ -153,6 +153,7 @@ def run_task(task: "Task") -> int:
 class Task:
     def __init__(self, name: str, cfg: dict) -> None:
         self.name = name
+        self.description: str | None = cfg.get("description")
         self.raw_cron: str | dict | None = cfg.get("cron", None)
         if self.raw_cron is None:
             raise ValueError("Invalid or missing cron schedule")
@@ -272,10 +273,13 @@ def cmd_list(tasks_file: str, args: argparse.Namespace) -> None:
     tasks = load_tasks(tasks_file)
     info("Configured tasks:")
     for task in tasks:
+        task_id = task.name
+        if task.description:
+            task_id = f"{task_id} - {task.description}"
         cron_expr = task.raw_cron
         if task.raw_cron != task.cron:
             cron_expr = f"{task.raw_cron} ({task.cron})"
-        info(f" - {task.name}: cron='{cron_expr}' command='{task.command.splitlines()[0]}'...")
+        info(f" - {task_id}: cron='{cron_expr}' command='{task.command.splitlines()[0]}'...")
 
 
 @file_command
