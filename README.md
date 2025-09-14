@@ -1,5 +1,18 @@
 # Cronico
 
+Cronico is a lightweight, YAML-based task scheduler for Unix-like systems.
+
+It lets you define recurring jobs with flexible cron expressions — supporting traditional minute-based syntax, extended formats with seconds, and common shorthand aliases (@daily, @hourly, etc.).
+
+Tasks can include:
+-	Retry policies with configurable attempts.
+-	Timeouts to kill long-running processes.
+-	Environment injection from .env files or inline variables.
+-	Working directory control per task.
+- Streaming or buffered logs for stdout/stderr.
+
+Cronico is designed to run as a long-lived daemon (via systemd or similar) and can reload its configuration on SIGHUP without restarting the process.
+
 ```yaml
 tasks:
   # Classic: every 5 minutes
