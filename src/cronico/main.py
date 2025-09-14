@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -81,73 +82,110 @@ def parse_cron(cron_cfg: str | dict) -> str:
     return expr
 
 
+def extract_shebang(command: str) -> str | None:
+    head = command.lstrip().splitlines()[0]
+    if head.startswith("#!"):
+        return head[2:].strip()
+    return None
+
+
+def extract_script_body(command: str) -> str:
+    lines = command.lstrip().splitlines()
+    if lines and lines[0].startswith("#!"):
+        return "\n".join(lines[1:]).lstrip()
+    return command.lstrip()
+
+
 def run_task(task: "Task") -> int:
     env = os.environ.copy()
     if task.env_file and Path(task.env_file).exists():
         env.update(dotenv_values(task.env_file))  # type: ignore
     env.update(task.environment)
 
-    start = time.monotonic()
-    process = subprocess.Popen(
-        task.command,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-        bufsize=1,
-        cwd=task.working_dir if task.working_dir else os.getcwd(),
-    )
+    command = task.command
 
-    if not task.stream_output:
+    tmp_path: str | None = None
+    shebang = extract_shebang(command)
+    if shebang:
+        script_body = extract_script_body(command)
+        if not script_body.strip():
+            task.log_error("No script body found after shebang")
+            return 1
 
-        def output_buffer(buf: str, fn: Callable[[str], None]) -> None:
-            if buf:
-                for line in buf.splitlines():
-                    fn(line)
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp:
+            tmp.write(script_body)
+            os.chmod(tmp.name, 0o700)
+            tmp_path = tmp.name
+            command = f"{shebang} {tmp_path}"
 
-        try:
-            stdout, stderr = process.communicate(timeout=task.timeout)
-            output_buffer(stdout, task.log_info)
-            output_buffer(stderr, task.log_error)
-        except subprocess.TimeoutExpired:
-            task.log_error(f"Timeout after {task.timeout}s, killing process...")
-            process.kill()
-            process.wait()
-            stdout, stderr = process.communicate()
-            output_buffer(stdout, task.log_info)
-            output_buffer(stderr, task.log_error)
-            raise
-    else:
+    try:
+        start = time.monotonic()
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            bufsize=1,
+            cwd=task.working_dir if task.working_dir else os.getcwd(),
+        )
 
-        def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
-            for line in iter(stream.readline, ""):
-                log_fn(line.rstrip())
-            stream.close()
+        if not task.stream_output:
 
-        t_out = threading.Thread(target=reader, args=(process.stdout, task.log_info))
-        t_err = threading.Thread(target=reader, args=(process.stderr, task.log_error))
-        threads = [t_out, t_err]
-        for t in threads:
-            t.daemon = True
-            t.start()
+            def output_buffer(buf: str, fn: Callable[[str], None]) -> None:
+                if buf:
+                    for line in buf.splitlines():
+                        fn(line)
 
-        try:
-            while True:
-                if task.timeout and (time.monotonic() - start) > task.timeout:
-                    task.log_error(f"Timeout after {task.timeout}s, killing process...")
-                    process.kill()
-                    process.wait()
-                    break
-                if process.poll() is not None:
-                    break
-                time.sleep(0.1)
-        finally:
+            try:
+                stdout, stderr = process.communicate(timeout=task.timeout)
+                output_buffer(stdout, task.log_info)
+                output_buffer(stderr, task.log_error)
+            except subprocess.TimeoutExpired:
+                task.log_error(f"Timeout after {task.timeout}s, killing process...")
+                process.kill()
+                process.wait()
+                stdout, stderr = process.communicate()
+                output_buffer(stdout, task.log_info)
+                output_buffer(stderr, task.log_error)
+                raise
+        else:
+
+            def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
+                for line in iter(stream.readline, ""):
+                    log_fn(line.rstrip())
+                stream.close()
+
+            t_out = threading.Thread(target=reader, args=(process.stdout, task.log_info))
+            t_err = threading.Thread(target=reader, args=(process.stderr, task.log_error))
+            threads = [t_out, t_err]
             for t in threads:
-                t.join()
+                t.daemon = True
+                t.start()
 
-    task.log_info(f"Process exited with code {process.returncode}")
-    return process.returncode
+            try:
+                while True:
+                    if task.timeout and (time.monotonic() - start) > task.timeout:
+                        task.log_error(f"Timeout after {task.timeout}s, killing process...")
+                        process.kill()
+                        process.wait()
+                        break
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.1)
+            finally:
+                for t in threads:
+                    t.join()
+
+        task.log_info(f"Process exited with code {process.returncode}")
+        return process.returncode
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except FileNotFoundError:
+                pass
 
 
 class Task:
