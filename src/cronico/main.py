@@ -275,7 +275,7 @@ def cmd_list(tasks_file: str, args: argparse.Namespace) -> None:
     for task in tasks:
         task_id = task.name
         if task.description:
-            task_id = f"{task_id} - {task.description}"
+            task_id = f"{task_id} - {task.description.strip()}"
         cron_expr = task.raw_cron
         if task.raw_cron != task.cron:
             cron_expr = f"{task.raw_cron} ({task.cron})"
