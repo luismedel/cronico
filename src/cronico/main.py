@@ -14,6 +14,8 @@ import yaml
 from croniter import CroniterBadCronError, croniter
 from dotenv import dotenv_values
 
+from cronico import __version__
+
 CRON_ALIASES = {
     "@yearly": "0 0 1 1 *",
     "@annually": "0 0 1 1 *",
@@ -389,7 +391,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="cronico", description="Cronico: another YAML-based scheduler")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parser.add_argument("--version", action="version", version="cronico 0.0.1")
+    parser.add_argument("--version", action="version", version=f"cronico {__version__}")
 
     parser.add_argument(
         "--file",
