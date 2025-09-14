@@ -37,7 +37,7 @@ def info(msg: str) -> None:
 
 
 def warning(msg: str) -> None:
-    print(f"WARNING: {msg}", file=sys.stderr, flush=True)
+    print(f"WARN : {msg}", file=sys.stderr, flush=True)
 
 
 def error(msg: str) -> None:
