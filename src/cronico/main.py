@@ -1,5 +1,7 @@
 import argparse
+import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -10,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Callable
+from uuid import uuid4
 
 import yaml
 from croniter import CroniterBadCronError, croniter
@@ -50,6 +53,54 @@ def error(msg: str) -> None:
 def critical(msg: str) -> None:
     print(f"ERROR: {msg}", file=sys.stderr, flush=True)
     sys.exit(1)
+
+
+# Blatantly adapted from Python 3.12's os.path.expandvars
+#
+# Expand paths containing shell variable substitutions.
+# This expands the forms $variable and ${variable} only.
+# Non-existent variables are left unchanged.
+
+R_VAR = re.compile(r"\$(\w+|\{[^}]*\})", re.ASCII)
+
+
+def expandvars(path: str, environ: dict) -> str:
+    """Expand shell variables of form $var and ${var}.  Unknown variables
+    are left unchanged.
+
+    >>> expandvars('abc$def$ghi${jkl}mno', {'def': 'D', 'jkl': 'J'})
+    'abcDghiJmno'
+    >>> expandvars('abc$def$ghi${jkl}mno', {})
+    'abc$def$ghi${jkl}mno'
+    >>> expandvars('abc$def$ghi $jkl mno', {'def': 'D', 'jkl': 'J'})
+    'abcDghi J mno'
+    """
+
+    if "$" not in path:
+        return path
+
+    start = "{"
+    end = "}"
+
+    i = 0
+    while True:
+        m = R_VAR.search(path, i)
+        if not m:
+            break
+        i, j = m.span(0)
+        name: str = m.group(1)
+        if name.startswith(start) and name.endswith(end):
+            name = name[1:-1]
+        try:
+            value = environ[name]
+        except KeyError:
+            i = j
+        else:
+            tail = path[j:]
+            path = path[:i] + value
+            i = len(path)
+            path += tail
+    return path
 
 
 def parse_cron(cron_cfg: str | dict) -> str:
@@ -109,7 +160,7 @@ def run_task(task: "Task") -> int:
     if shebang:
         script_body = extract_script_body(command)
         if not script_body.strip():
-            task.log_error("No script body found after shebang")
+            task.logger.error("No script body found after shebang")
             return 1
 
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp:
@@ -140,15 +191,15 @@ def run_task(task: "Task") -> int:
 
             try:
                 stdout, stderr = process.communicate(timeout=task.timeout)
-                output_buffer(stdout, task.log_info)
-                output_buffer(stderr, task.log_error)
+                output_buffer(stdout, task.logger.info)
+                output_buffer(stderr, task.logger.error)
             except subprocess.TimeoutExpired:
-                task.log_error(f"Timeout after {task.timeout}s, killing process...")
+                task.logger.error(f"Timeout after {task.timeout}s, killing process...")
                 process.kill()
                 process.wait()
                 stdout, stderr = process.communicate()
-                output_buffer(stdout, task.log_info)
-                output_buffer(stderr, task.log_error)
+                output_buffer(stdout, task.logger.info)
+                output_buffer(stderr, task.logger.error)
                 raise
         else:
 
@@ -157,8 +208,8 @@ def run_task(task: "Task") -> int:
                     log_fn(line.rstrip())
                 stream.close()
 
-            t_out = threading.Thread(target=reader, args=(process.stdout, task.log_info))
-            t_err = threading.Thread(target=reader, args=(process.stderr, task.log_error))
+            t_out = threading.Thread(target=reader, args=(process.stdout, task.logger.info))
+            t_err = threading.Thread(target=reader, args=(process.stderr, task.logger.error))
             threads = [t_out, t_err]
             for t in threads:
                 t.daemon = True
@@ -167,7 +218,7 @@ def run_task(task: "Task") -> int:
             try:
                 while True:
                     if task.timeout and (time.monotonic() - start) > task.timeout:
-                        task.log_error(f"Timeout after {task.timeout}s, killing process...")
+                        task.logger.error(f"Timeout after {task.timeout}s, killing process...")
                         process.kill()
                         process.wait()
                         break
@@ -178,7 +229,7 @@ def run_task(task: "Task") -> int:
                 for t in threads:
                     t.join()
 
-        task.log_info(f"Process exited with code {process.returncode}")
+        task.logger.info(f"Process exited with code {process.returncode}")
         return process.returncode
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -199,17 +250,28 @@ class Task:
         self.command: str = cfg.get("command", "")
         if not self.command:
             raise ValueError("Missing command to run")
+
         self.stream_output: bool = cfg.get("stream_output", True)
+
         self.retry_on_error: bool = cfg.get("retry_on_error", False)
         self.max_attempts = int(cfg.get("max_attempts", 1))
+
         timeout = cfg.get("timeout")
         self.timeout: float | None = float(timeout) if timeout is not None else None
+        
         self.env_file = cfg.get("env_file")
         self.environment = cfg.get("environment") or {}
         self.working_dir = cfg.get("working_dir") or None
+
+        self.log_file: str | None = cfg.get("log_file")
+        self.logger = logging.Logger(self.name, level=logging.INFO)
+        self.logger.handlers.clear()
+        self.logger.addHandler(logging.StreamHandler(sys.stdout))
+
         self.last_run: datetime | None = None
         self.next_run: datetime = None  # type: ignore
         self.calculate_next_run()
+
         self._running = False
         self._pending = False
 
@@ -222,41 +284,50 @@ class Task:
             raise RuntimeError("Cannot mark a running task as pending")
         self._pending = True
 
-    def log_info(self, msg: str) -> None:
-        tstamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        info(f"[{tstamp}] [{self.name}] {msg}")
-
-    def log_error(self, msg: str) -> None:
-        tstamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        error(f"[{tstamp}] [{self.name}] {msg}")
-
     def calculate_next_run(self, from_: datetime | None = None) -> None:
         start_time = from_ or datetime.now()
         self.next_run = croniter(self.cron, start_time).get_next(datetime)
 
     def run(self) -> None:
+        task_id = uuid4().hex[:8]
+
         self._running = True
         self.last_run = datetime.now()
 
+        env = os.environ.copy()
+        if self.env_file and Path(self.env_file).exists():
+            env.update(dotenv_values(self.env_file))  # type: ignore
+        env.update(self.environment)
+
+        if self.log_file:
+            path_env = dict(env)
+            path_env["NAME"] = self.name
+            path_env["TASKID"] = task_id
+            path_env["TIMESTAMP"] = self.last_run.strftime("%Y%m%d%H%M%S")
+
+            path = expandvars(self.log_file, path_env)
+
+            self.logger.addHandler(logging.FileHandler(path, mode="a", encoding="utf-8"))
+
         try:
-            self.log_info("Starting...")
+            self.logger.info(f"Starting task '{self.name}' (id={task_id}) on {self.last_run.isoformat()}")
             attempts = 0
             success = False
 
             while attempts < self.max_attempts and not success:
                 attempts += 1
-                self.log_info(f"Attempt {attempts}/{self.max_attempts}")
+                self.logger.info(f"Attempt {attempts}/{self.max_attempts}")
                 try:
                     returncode = run_task(self)
                     if returncode == 0:
-                        self.log_info("Finished successfully")
+                        self.logger.info("Finished successfully")
                         success = True
                     else:
-                        self.log_error(f"Failed (exit {returncode})")
+                        self.logger.error(f"Failed (exit {returncode})")
                 except subprocess.TimeoutExpired:
-                    self.log_error("Timeout expired")
+                    self.logger.error("Timeout expired")
                 except Exception as e:
-                    self.log_error(f"Exception: {e}")
+                    self.logger.error(f"Exception: {e}")
 
                 if not success and not self.retry_on_error:
                     break
