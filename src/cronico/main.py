@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Callable
+from typing import IO, Callable, Never
 from uuid import uuid4
 
 import yaml
@@ -50,7 +50,7 @@ def error(msg: str) -> None:
     print(f"ERROR: {msg}", file=sys.stderr, flush=True)
 
 
-def critical(msg: str) -> None:
+def critical(msg: str) -> Never:
     print(f"ERROR: {msg}", file=sys.stderr, flush=True)
     sys.exit(1)
 
@@ -258,7 +258,7 @@ class Task:
 
         timeout = cfg.get("timeout")
         self.timeout: float | None = float(timeout) if timeout is not None else None
-        
+
         self.env_file = cfg.get("env_file")
         self.environment = cfg.get("environment") or {}
         self.working_dir = cfg.get("working_dir") or None
