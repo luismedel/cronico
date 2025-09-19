@@ -179,7 +179,7 @@ def run_task(task: "Task") -> int:
             text=True,
             env=env,
             bufsize=1,
-            cwd=task.working_dir if task.working_dir else os.getcwd(),
+            cwd=task.working_dir,
         )
 
         if not task.stream_output:
@@ -261,7 +261,7 @@ class Task:
 
         self.env_file = cfg.get("env_file")
         self.environment = cfg.get("environment") or {}
-        self.working_dir = cfg.get("working_dir") or None
+        self.working_dir = cfg.get("working_dir") or os.getcwd()
 
         self.log_file: str | None = cfg.get("log_file")
         self.logger = logging.Logger(self.name, level=logging.INFO)
@@ -303,11 +303,16 @@ class Task:
             path_env = dict(env)
             path_env["NAME"] = self.name
             path_env["TASKID"] = task_id
+            path_env["WORKING_DIR"] = self.working_dir
             path_env["TIMESTAMP"] = self.last_run.strftime("%Y%m%d%H%M%S")
 
-            path = expandvars(self.log_file, path_env)
+            log_path = expandvars(self.log_file, path_env)
+            directory = os.path.dirname(log_path)
+            if not os.path.exists(directory):
+                self.logger.info(f"Creating log directory {directory}")
+                os.makedirs(directory, exist_ok=True)
 
-            self.logger.addHandler(logging.FileHandler(path, mode="a", encoding="utf-8"))
+            self.logger.addHandler(logging.FileHandler(log_path, mode="a", encoding="utf-8"))
 
         try:
             self.logger.info(f"Starting task '{self.name}' (id={task_id}) on {self.last_run.isoformat()}")
