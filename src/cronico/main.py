@@ -362,24 +362,26 @@ def load_tasks(tasks_file: str) -> list[Task]:
     return result
 
 
-def file_command(fn: Callable[[str, argparse.Namespace], None]) -> Callable[[argparse.Namespace], None]:
+def file_command(fn: Callable[[list[Task], str, argparse.Namespace], None]) -> Callable[[argparse.Namespace], None]:
     def wrapper(args: argparse.Namespace) -> None:
         tasks_file = args.file or TASKS_FILE
+        info(f"Using tasks file {tasks_file}")
+
         try:
-            fn(tasks_file, args)
+            tasks = load_tasks(tasks_file)
+            fn(tasks, tasks_file, args)
         except FileNotFoundError:
             critical(f"Tasks file '{tasks_file}' not found")
         except yaml.YAMLError as e:
             critical(f"Error parsing YAML file '{tasks_file}': {e}")
         except Exception as e:
-            critical(f"Unexpected error: {e}")
+            critical(f"Unexpected error parsing tasks file '{tasks_file}': {e}")
 
     return wrapper
 
 
 @file_command
-def cmd_list(tasks_file: str, args: argparse.Namespace) -> None:
-    tasks = load_tasks(tasks_file)
+def cmd_list(tasks: list[Task], tasks_file: str, args: argparse.Namespace) -> None:
     info("Configured tasks:")
     for task in tasks:
         task_id = task.name
@@ -392,8 +394,7 @@ def cmd_list(tasks_file: str, args: argparse.Namespace) -> None:
 
 
 @file_command
-def cmd_run(tasks_file: str, args: argparse.Namespace) -> None:
-    tasks = load_tasks(tasks_file)
+def cmd_run(tasks: list[Task], tasks_file: str, args: argparse.Namespace) -> None:
     name = args.name
 
     task = next((t for t in tasks if t.name == name), None)
@@ -404,7 +405,7 @@ def cmd_run(tasks_file: str, args: argparse.Namespace) -> None:
 
 
 @file_command
-def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
+def cmd_daemon(tasks: list[Task], tasks_file: str, args: argparse.Namespace) -> None:
     import atexit
 
     pidfile = args.pidfile
@@ -412,8 +413,6 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
     atexit.register(remove_lockfile, path=pidfile)
 
     stop_event = threading.Event()
-
-    tasks: list[Task] = []
 
     def load_tasks_file(signum: int | None = None, frame=None) -> None:
         if signum is not None:
@@ -427,7 +426,7 @@ def cmd_daemon(tasks_file: str, args: argparse.Namespace) -> None:
         except Exception as e:
             error(f"Error reloading tasks: {e}")
 
-    def signal_exit(signum, frame) -> None:
+    def signal_exit(signum, _) -> None:
         signal_name = signal.Signals(signum).name
         info(f"Received signal {signal_name} ({signum}).")
         if signum in (signal.SIGINT, signal.SIGTERM):
