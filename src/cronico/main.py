@@ -264,9 +264,13 @@ class Task:
         self.working_dir = cfg.get("working_dir") or os.getcwd()
 
         self.log_file: str | None = cfg.get("log_file")
+        self.log_file_format_string: str = cfg.get("log_file_format_string", "%(asctime)s [%(levelname)s] %(message)s")
+        self.log_format_string: str = cfg.get("log_format_string", "%(asctime)s [%(levelname)s] %(message)s")
         self.logger = logging.Logger(self.name, level=logging.INFO)
         self.logger.handlers.clear()
-        self.logger.addHandler(logging.StreamHandler(sys.stdout))
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(logging.Formatter(self.log_format_string))
+        self.logger.addHandler(stream_handler)
 
         self.last_run: datetime | None = None
         self.next_run: datetime = None  # type: ignore
@@ -312,7 +316,9 @@ class Task:
                 self.logger.info(f"Creating log directory {directory}")
                 os.makedirs(directory, exist_ok=True)
 
-            self.logger.addHandler(logging.FileHandler(log_path, mode="a", encoding="utf-8"))
+            file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+            file_handler.setFormatter(logging.Formatter(self.log_file_format_string))
+            self.logger.addHandler(file_handler)
 
         try:
             self.logger.info(f"Starting task '{self.name}' (id={task_id}) on {self.last_run.isoformat()}")
