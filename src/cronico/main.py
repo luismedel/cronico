@@ -302,6 +302,8 @@ class Task:
         if self.env_file and Path(self.env_file).exists():
             env.update(dotenv_values(self.env_file))  # type: ignore
         env.update(self.environment)
+        
+        added_handlers: list[logging.Handler] = []
 
         if self.log_file:
             path_env = dict(env)
@@ -319,6 +321,7 @@ class Task:
             file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
             file_handler.setFormatter(logging.Formatter(self.log_file_format_string))
             self.logger.addHandler(file_handler)
+            added_handlers.append(file_handler)
 
         try:
             self.logger.info(f"Starting task '{self.name}' (id={task_id}) on {self.last_run.isoformat()}")
@@ -344,6 +347,11 @@ class Task:
                     break
 
         finally:
+            for handler in added_handlers:
+                self.logger.removeHandler(handler)
+                handler.flush()
+                handler.close()
+
             self._running = False
             self._pending = False
             self.calculate_next_run(datetime.now())
