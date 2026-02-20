@@ -17,6 +17,8 @@ from uuid import uuid4
 import yaml
 from croniter import CroniterBadCronError, croniter
 from dotenv import dotenv_values
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from cronico import __version__
 
@@ -121,7 +123,6 @@ def parse_cron(cron_cfg: str | dict) -> str:
         if "second" in cron_cfg:
             second = str(cron_cfg["second"])
             expr = f"{expr} {second}"
-
     else:
         raise ValueError(f"Invalid cron format: {cron_cfg!r}")
 
@@ -163,14 +164,15 @@ def run_task(task: "Task") -> int:
             task.logger.error("No script body found after shebang")
             return 1
 
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, delete_on_close=True) as tmp:
             tmp.write(script_body)
             os.chmod(tmp.name, 0o700)
             tmp_path = tmp.name
-            command = f"{shebang} {tmp_path}"
+        command = f"{shebang} {tmp_path}"
 
     try:
         start = time.monotonic()
+
         process = subprocess.Popen(
             command,
             shell=True,
@@ -182,52 +184,29 @@ def run_task(task: "Task") -> int:
             cwd=task.working_dir,
         )
 
-        if not task.stream_output:
+        def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
+            for line in iter(stream.readline, ""):
+                log_fn(line.rstrip())
 
-            def output_buffer(buf: str, fn: Callable[[str], None]) -> None:
-                if buf:
-                    for line in buf.splitlines():
-                        fn(line)
+        t_out = threading.Thread(target=reader, args=(process.stdout, task.logger.info), daemon=True)
+        t_err = threading.Thread(target=reader, args=(process.stderr, task.logger.error), daemon=True)
+        threads = [t_out, t_err]
+        for t in threads:
+            t.start()
 
-            try:
-                stdout, stderr = process.communicate(timeout=task.timeout)
-                output_buffer(stdout, task.logger.info)
-                output_buffer(stderr, task.logger.error)
-            except subprocess.TimeoutExpired:
-                task.logger.error(f"Timeout after {task.timeout}s, killing process...")
-                process.kill()
-                process.wait()
-                stdout, stderr = process.communicate()
-                output_buffer(stdout, task.logger.info)
-                output_buffer(stderr, task.logger.error)
-                raise
-        else:
-
-            def reader(stream: IO[str], log_fn: Callable[[str], None]) -> None:
-                for line in iter(stream.readline, ""):
-                    log_fn(line.rstrip())
-                stream.close()
-
-            t_out = threading.Thread(target=reader, args=(process.stdout, task.logger.info))
-            t_err = threading.Thread(target=reader, args=(process.stderr, task.logger.error))
-            threads = [t_out, t_err]
+        try:
+            while True:
+                if task.timeout and (time.monotonic() - start) > task.timeout:
+                    task.logger.error(f"Timeout after {task.timeout}s, killing process...")
+                    process.kill()
+                    process.wait()
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.1)
+        finally:
             for t in threads:
-                t.daemon = True
-                t.start()
-
-            try:
-                while True:
-                    if task.timeout and (time.monotonic() - start) > task.timeout:
-                        task.logger.error(f"Timeout after {task.timeout}s, killing process...")
-                        process.kill()
-                        process.wait()
-                        break
-                    if process.poll() is not None:
-                        break
-                    time.sleep(0.1)
-            finally:
-                for t in threads:
-                    t.join()
+                t.join()
 
         task.logger.info(f"Process exited with code {process.returncode}")
         return process.returncode
@@ -236,7 +215,7 @@ def run_task(task: "Task") -> int:
             try:
                 os.remove(tmp_path)
             except FileNotFoundError:
-                pass
+                task.logger.warning(f"Temporary script file {tmp_path} not found for deletion")
 
 
 class Task:
@@ -250,8 +229,6 @@ class Task:
         self.command: str = cfg.get("command", "")
         if not self.command:
             raise ValueError("Missing command to run")
-
-        self.stream_output: bool = cfg.get("stream_output", True)
 
         self.retry_on_error: bool = cfg.get("retry_on_error", False)
         self.max_attempts = int(cfg.get("max_attempts", 1))
@@ -457,16 +434,34 @@ def cmd_daemon(tasks: list[Task], tasks_file: str, args: argparse.Namespace) -> 
     signal.signal(signal.SIGTERM, signal_exit)
     signal.signal(signal.SIGHUP, load_tasks_file)
 
+    tasks_file_abspath = os.path.abspath(tasks_file)
+    tasks_root_path = os.path.dirname(os.path.abspath(tasks_file))
+
+    class TasksFileEventHandler(FileSystemEventHandler):
+        def on_modified(self, event):
+            if os.path.abspath(event.src_path) != tasks_file_abspath:
+                return
+            info(f"Detected change in tasks file '{tasks_file_abspath}'. Reloading...")
+            load_tasks_file()
+
+    change_event_handler = TasksFileEventHandler()
+    change_observer = Observer()
+    change_observer.schedule(change_event_handler, tasks_root_path, recursive=True)
+    change_observer.start()
+
     load_tasks_file()
     executor = ThreadPoolExecutor(max_workers=args.workers)
 
     try:
         next_task: Task | None = None
-        while not stop_event.is_set():
+        while True:
+            stop_event.wait(1)
+            if stop_event.is_set():
+                break
+
             sorted_tasks: list[Task] = sorted(tasks, key=lambda t: t.next_run)  # type: ignore
             task: Task | None = next((t for t in sorted_tasks if t.next_run and not t.is_busy), None)
             if not task:
-                stop_event.wait(1)
                 continue
 
             next_run = task.next_run
@@ -476,18 +471,17 @@ def cmd_daemon(tasks: list[Task], tasks_file: str, args: argparse.Namespace) -> 
                 if task != next_task:
                     next_task = task
                     info(f"Next task to run: '{task.name}' at {next_run}")
-                stop_event.wait(1)
                 continue
-
-            if stop_event.is_set():
-                break
 
             next_task = None
             task.mark_pending()
             _ = executor.submit(task.run)
     finally:
         info("Shutting down...")
+        change_observer.stop()
+        change_observer.join()
         executor.shutdown(wait=True)
+
     info("Exited cleanly.")
 
 
