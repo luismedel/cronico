@@ -148,12 +148,15 @@ def extract_script_body(command: str) -> str:
     return command.lstrip()
 
 
-def run_task(task: "Task") -> int:
+def get_fresh_env(task: "Task") -> dict:
     env = os.environ.copy()
     if task.env_file and Path(task.env_file).exists():
         env.update(dotenv_values(task.env_file))  # type: ignore
     env.update(task.environment)
+    return {k: str(v) for k, v in env.items()}
 
+
+def run_task(task: "Task") -> int:
     command = task.command
 
     tmp_path: str | None = None
@@ -179,7 +182,7 @@ def run_task(task: "Task") -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=get_fresh_env(task),
             bufsize=1,
             cwd=task.working_dir,
         )
@@ -204,12 +207,18 @@ def run_task(task: "Task") -> int:
                 if process.poll() is not None:
                     break
                 time.sleep(0.1)
+        except Exception as e:
+            task.logger.error(f"Error while running task: {e}")
+            process.kill()
         finally:
             for t in threads:
                 t.join()
 
         task.logger.info(f"Process exited with code {process.returncode}")
         return process.returncode
+    except Exception as e:
+        task.logger.error(f"Failed to start process: {e}")
+        return 1
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -275,15 +284,10 @@ class Task:
         self._running = True
         self.last_run = datetime.now()
 
-        env = os.environ.copy()
-        if self.env_file and Path(self.env_file).exists():
-            env.update(dotenv_values(self.env_file))  # type: ignore
-        env.update(self.environment)
-        
         added_handlers: list[logging.Handler] = []
 
         if self.log_file:
-            path_env = dict(env)
+            path_env = get_fresh_env(self)
             path_env["NAME"] = self.name
             path_env["TASKID"] = task_id
             path_env["WORKING_DIR"] = self.working_dir
