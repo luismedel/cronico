@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -11,7 +13,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Callable, Never
+from typing import IO, Callable
+
+try:
+    from typing import Never
+except ImportError:  # pragma: no cover - Python < 3.11 fallback
+    from typing_extensions import Never
 from uuid import uuid4
 
 import yaml
@@ -167,7 +174,7 @@ def run_task(task: "Task") -> int:
             task.logger.error("No script body found after shebang")
             return 1
 
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, delete_on_close=True) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as tmp:
             tmp.write(script_body)
             os.chmod(tmp.name, 0o700)
             tmp_path = tmp.name
@@ -582,5 +589,5 @@ def remove_lockfile(path: str) -> None:
         warning(f"Could not remove lockfile: {e}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

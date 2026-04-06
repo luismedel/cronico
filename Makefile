@@ -1,5 +1,5 @@
 
-.PHONY: lint format build publish
+.PHONY: lint format test build publish
 
 lint:
 	@ruff --version
@@ -16,6 +16,9 @@ format:
 	@ruff --version
 	@ruff check --select I --fix src/cronico
 	@ruff format --line-length=120 src/cronico
+
+test:
+	@pytest --cov=src/cronico --cov-report=term-missing
 
 build:
 	python -m build
