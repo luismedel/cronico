@@ -175,8 +175,6 @@ def install_daemon_doubles(
     monkeypatch.setattr(
         "cronico.main.signal.signal", lambda signum, handler: signal_handlers.setdefault(signum, handler)
     )
-    monkeypatch.setattr("cronico.main.os.path.abspath", lambda path: str(Path(path).resolve()))
-    monkeypatch.setattr("cronico.main.os.path.dirname", lambda path: str(Path(path).resolve().parent))
     monkeypatch.setattr(atexit, "register", lambda fn, path: registered_atexit.append((fn, path)))
 
     class FakeDateTime:
