@@ -57,7 +57,9 @@ def test_task_init_requires_cron_and_command(tmp_path: Path, cfg: dict) -> None:
         Task("broken", cfg)
 
 
-def test_get_fresh_env_merges_process_dotenv_and_task_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_fresh_env_merges_process_dotenv_and_task_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("FROM_FILE=file-value\nOVERRIDE=from-file\n", encoding="utf-8")
 
@@ -101,9 +103,7 @@ def test_run_task_times_out_and_kills_process(tmp_path: Path) -> None:
     assert "Timeout after 0.01s, killing process..." in output
 
 
-def test_run_task_returns_error_when_process_fails_to_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_task_returns_error_when_process_fails_to_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = make_task(tmp_path)
     stream = attach_log_buffer(task)
 
@@ -305,7 +305,9 @@ def test_run_task_logs_error_when_monitoring_loop_fails(tmp_path: Path, monkeypa
     assert process.killed is True
 
 
-def test_run_task_warns_when_temporary_script_was_already_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_task_warns_when_temporary_script_was_already_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     task = make_task(tmp_path, command="#!/bin/sh\nprintf 'script-run\\n'")
     stream = attach_log_buffer(task)
 

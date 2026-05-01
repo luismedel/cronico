@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cronico.main import extract_script_body, extract_shebang, expandvars, parse_cron
+from cronico.main import expandvars, extract_script_body, extract_shebang, parse_cron
 
 
 def test_expandvars_expands_known_variables() -> None:

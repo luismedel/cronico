@@ -10,12 +10,12 @@ lint:
 
 lint-fix:
 	@ruff --version
-	@ruff check --fix src/cronico
+	@ruff check --fix src/cronico tests/
 
 format:
 	@ruff --version
-	@ruff check --select I --fix src/cronico
-	@ruff format --line-length=120 src/cronico
+	@ruff check --select I --fix src/cronico tests/
+	@ruff format --line-length=120 src/cronico tests/
 
 test:
 	@pytest --cov=src/cronico --cov-report=term-missing

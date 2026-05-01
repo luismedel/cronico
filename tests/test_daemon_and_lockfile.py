@@ -172,7 +172,9 @@ def install_daemon_doubles(
     monkeypatch.setattr("cronico.main.Observer", FakeObserver)
     monkeypatch.setattr("cronico.main.ThreadPoolExecutor", FakeExecutor)
     monkeypatch.setattr("cronico.main.threading.Event", lambda: stop_event)
-    monkeypatch.setattr("cronico.main.signal.signal", lambda signum, handler: signal_handlers.setdefault(signum, handler))
+    monkeypatch.setattr(
+        "cronico.main.signal.signal", lambda signum, handler: signal_handlers.setdefault(signum, handler)
+    )
     monkeypatch.setattr("cronico.main.os.path.abspath", lambda path: str(Path(path).resolve()))
     monkeypatch.setattr("cronico.main.os.path.dirname", lambda path: str(Path(path).resolve().parent))
     monkeypatch.setattr(atexit, "register", lambda fn, path: registered_atexit.append((fn, path)))
@@ -236,7 +238,9 @@ def test_cmd_daemon_skips_busy_tasks(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert busy_due_task.pending_calls == 0
 
 
-def test_cmd_daemon_registers_signal_handlers_and_reloads_tasks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cmd_daemon_registers_signal_handlers_and_reloads_tasks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     initial = [FakeTask("first", datetime(2026, 1, 1, 12, 1, 0))]
     reloaded = [FakeTask("second", datetime(2026, 1, 1, 12, 2, 0))]
     context = install_daemon_doubles(monkeypatch, [initial, reloaded], FakeStopEvent(True))
